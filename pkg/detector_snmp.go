@@ -18,12 +18,11 @@ type SNMPDetector struct {
 	version   gosnmp.SnmpVersion
 }
 
-// NewSNMPDetector 创建新的 SNMP 探测器，使用内置的社区字符串和 SNMP 版本
-func NewSNMPDetector(timeout time.Duration) *SNMPDetector {
+func NewSNMPDetector() *SNMPDetector {
 	return &SNMPDetector{
-		BaseDetector: BaseDetector{timeout: timeout},
-		community:    "public",         // 默认社区字符串
-		version:      gosnmp.Version2c, // 默认 SNMP 版本
+		BaseDetector: BaseDetector{},
+		community:    "public",
+		version:      gosnmp.Version2c,
 	}
 }
 
@@ -74,7 +73,7 @@ func (s *SNMPDetector) scanSNMP(ip string) *stage.Node {
 		Port:      161,
 		Community: s.community,
 		Version:   s.version,
-		Timeout:   s.timeout,
+		Timeout:   5 * time.Second,
 		Retries:   1,
 	}
 

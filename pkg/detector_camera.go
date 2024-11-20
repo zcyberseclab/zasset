@@ -88,7 +88,7 @@ func (d *CameraDetector) receiveResponses(conn *net.UDPConn, manufacturer string
 	buffer := make([]byte, 2048)
 
 	// 设置读取超时
-	conn.SetReadDeadline(time.Now().Add(d.timeout))
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 
 	for {
 		n, remoteAddr, err := conn.ReadFromUDP(buffer)
@@ -150,9 +150,9 @@ func extractModelInfo(data []byte, prefix string) string {
 	return string(data[modelIndex+len(prefix) : modelIndex+endIndex])
 }
 
-func NewCameraDetector(timeout time.Duration) *CameraDetector {
+func NewCameraDetector() *CameraDetector {
 	return &CameraDetector{
-		BaseDetector: BaseDetector{timeout: timeout},
+		BaseDetector: BaseDetector{},
 	}
 }
 
@@ -160,17 +160,15 @@ func (d *CameraDetector) Name() string {
 	return "CameraDetector"
 }
 
-// Add this method to implement the Detector interface
 func (d *CameraDetector) Detect(target string) ([]stage.Node, error) {
-	// 创建通道
+
 	hikNodes := make(chan []stage.Node, 1)
 	dahuaNodes := make(chan []stage.Node, 1)
 	hikErr := make(chan error, 1)
 	dahuaErr := make(chan error, 1)
 
-	// 启动海康威视探测
 	go func() {
-		// 为海康威视创建专用连接
+
 		conn, err := net.ListenUDP("udp4", &net.UDPAddr{
 			IP:   net.IPv4(0, 0, 0, 0),
 			Port: HikListenPort,
@@ -187,9 +185,8 @@ func (d *CameraDetector) Detect(target string) ([]stage.Node, error) {
 		hikErr <- err
 	}()
 
-	// 启动大华探测
 	go func() {
-		// 为大华创建专用连接
+
 		conn, err := net.ListenUDP("udp4", &net.UDPAddr{
 			IP:   net.IPv4(0, 0, 0, 0),
 			Port: DahuaListenPort,
@@ -206,17 +203,14 @@ func (d *CameraDetector) Detect(target string) ([]stage.Node, error) {
 		dahuaErr <- err
 	}()
 
-	// 收集结果
 	var nodes []stage.Node
 
-	// 添加超时控制
-	timeout := time.After(d.timeout)
+	timeout := time.After(6 * time.Second)
 
 	// 使用select来处理结果和超时
 	var hikResult, dahuaResult []stage.Node
 	var err1, err2 error
 
-	// 等待两个结果或超时
 	for i := 0; i < 2; i++ {
 		select {
 		case hikResult = <-hikNodes:
@@ -226,11 +220,10 @@ func (d *CameraDetector) Detect(target string) ([]stage.Node, error) {
 			err2 = <-dahuaErr
 			nodes = append(nodes, dahuaResult...)
 		case <-timeout:
-			return nodes, fmt.Errorf("detection timeout after %v", d.timeout)
+			return nodes, fmt.Errorf("detection timeout after %v", 2*time.Second)
 		}
 	}
 
-	// 处理错误
 	if err1 != nil && err2 != nil {
 		return nodes, fmt.Errorf("detection failed: hikvision: %v, dahua: %v", err1, err2)
 	}

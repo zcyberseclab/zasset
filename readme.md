@@ -115,6 +115,20 @@ func main() {
 	log.Printf("\nScan completed in: %v\n", duration)
 }
 ```
+## How to build oui.txt
+```bash
+gzip -9 oui.txt
+```
+it will generate oui.txt.gz file, put it in the pkg directory.
+
+The format of oui.txt.gz is as follows:
+```
+FCF528 Zyxel Communications Corporation
+FCF5C4 Espressif Inc.
+FCF647 Fiberhome Telecommunication Technologies Co.
+FCF763 KunGao Micro (JiangSu) Co.
+FCF77B Huawei Device Co.
+```
 
 ## Our Mission
  

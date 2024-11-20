@@ -5,7 +5,6 @@ import (
 	"log"
 	"net"
 	"sync"
-	"time"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
@@ -20,7 +19,7 @@ type ARPDetector struct {
 
 func NewARPDetector(iface string) *ARPDetector {
 	return &ARPDetector{
-		BaseDetector: BaseDetector{timeout: 5 * time.Second},
+		BaseDetector: BaseDetector{},
 		iface:        iface,
 	}
 }

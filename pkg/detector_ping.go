@@ -15,9 +15,9 @@ type PingDetector struct {
 	BaseDetector
 }
 
-func NewPingDetector(timeout time.Duration) *PingDetector {
+func NewPingDetector() *PingDetector {
 	return &PingDetector{
-		BaseDetector: BaseDetector{timeout: timeout},
+		BaseDetector: BaseDetector{},
 	}
 }
 

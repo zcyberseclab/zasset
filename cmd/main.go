@@ -6,7 +6,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/zcyberseclab/zscan/pkg/zasset"
+	zasset "github.com/zcyberseclab/zasset/pkg"
 )
 
 var (
@@ -17,7 +17,7 @@ var (
 
 func main() {
 	target := flag.String("target", "", "IP address or CIDR range to scan")
-	configPath := flag.String("config", "config/config.yaml", "Path to config file")
+	configPath := flag.String("portconfig", "config/port_config.yaml", "Path to config file")
 	templatesDir := flag.String("templates", "templates", "Path to templates directory")
 	versionFlag := flag.Bool("version", false, "Show version information")
 
@@ -36,13 +36,13 @@ func main() {
 
 	startTime := time.Now()
 
-	detector := &zasset.BaseDetector{
-		timeout: 5 * time.Second,
-	}
-
-	nodes, err := detector.Detect(*target)
+	scanner := zasset.NewScanner(&zasset.ScannerConfig{
+		ConfigPath:   *configPath,
+		TemplatesDir: *templatesDir,
+	})
+	nodes, err := scanner.StartScan(*target)
 	if err != nil {
-		log.Fatalf("Detection failed: %v", err)
+		log.Fatalf("Scan failed: %v", err)
 	}
 
 	for _, node := range nodes {

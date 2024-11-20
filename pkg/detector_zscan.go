@@ -11,22 +11,14 @@ type ZScanDetector struct {
 	BaseDetector
 	configPath   string
 	templatesDir string
-	enableGeo    bool
-	enableCensys bool
-	censysAPIKey string
-	censysSecret string
 }
 
 // NewZScanDetector 创建新的ZScan探测器
 func NewZScanDetector(config *ScannerConfig) *ZScanDetector {
 	return &ZScanDetector{
-		BaseDetector: BaseDetector{timeout: config.Timeout},
+		BaseDetector: BaseDetector{},
 		configPath:   config.ConfigPath,
 		templatesDir: config.TemplatesDir,
-		enableGeo:    config.EnableGeo,
-		enableCensys: config.EnableCensys,
-		censysAPIKey: config.CensysAPIKey,
-		censysSecret: config.CensysSecret,
 	}
 }
 
@@ -37,14 +29,13 @@ func (z *ZScanDetector) Name() string {
 func (z *ZScanDetector) Detect(target string) ([]stage.Node, error) {
 	log.Printf("[ZScan] Starting detection for target: %s\n", target)
 
-	// 初始化zscan
 	scanner, err := stage.NewScanner(
 		z.configPath,
 		z.templatesDir,
-		z.enableGeo,
-		z.enableCensys,
-		z.censysAPIKey,
-		z.censysSecret,
+		false,
+		false,
+		"",
+		"",
 	)
 	if err != nil {
 		log.Printf("[ZScan] Failed to initialize scanner: %v\n", err)

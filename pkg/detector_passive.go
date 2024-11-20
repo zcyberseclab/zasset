@@ -15,19 +15,15 @@ import (
 	"github.com/zcyberseclab/zscan/pkg/stage"
 )
 
-// PassiveDetector 被动探测器
 type PassiveDetector struct {
 	BaseDetector
-	iface  string
 	assets map[string]*stage.Node
 	mu     sync.Mutex
 }
 
-// NewPassiveDetector 创建新的被动探测器
-func NewPassiveDetector(iface string) *PassiveDetector {
+func NewPassiveDetector() *PassiveDetector {
 	return &PassiveDetector{
-		BaseDetector: BaseDetector{timeout: 5 * time.Minute},
-		iface:        iface,
+		BaseDetector: BaseDetector{},
 		assets:       make(map[string]*stage.Node),
 	}
 }
@@ -43,8 +39,6 @@ func (p *PassiveDetector) getNodes() ([]stage.Node, error) {
 }
 
 func (p *PassiveDetector) Detect(target string) ([]stage.Node, error) {
-	log.Printf("[Passive] ====== Starting passive detection for target: %s ======\n", target)
-	log.Printf("[Passive] Using interface: %s with timeout: %v\n", p.iface, p.timeout)
 
 	handle, err := p.openInterface()
 	if err != nil {
@@ -81,7 +75,7 @@ func (p *PassiveDetector) capturePackets(handle *pcap.Handle) error {
 	fmt.Println("----------------------------------------")
 
 	// 设置超时通道
-	timeout := time.After(p.timeout)
+	timeout := time.After(5 * time.Minute)
 
 	for {
 		select {

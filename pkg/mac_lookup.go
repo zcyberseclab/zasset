@@ -18,10 +18,9 @@ var ouiData embed.FS
 const (
 	localDataDir  = "data"
 	localDataFile = "oui.txt"
-	embeddedFile  = "data/oui.txt.gz"
+	embeddedFile  = "oui.txt.gz"
 )
 
-// OUIDatabase MAC地址前缀数据库
 type OUIDatabase struct {
 	manufacturers map[string]string
 	mu            sync.RWMutex
@@ -33,49 +32,41 @@ var (
 	ouiDBOnce sync.Once
 )
 
-// extractEmbeddedData 解压嵌入的数据到本地文件
 func extractEmbeddedData() error {
-	// 确保目录存在
+
 	if err := os.MkdirAll(localDataDir, 0755); err != nil {
 		return err
 	}
 
 	localPath := filepath.Join(localDataDir, localDataFile)
 
-	// 如果本地文件已存在，直接返回
 	if _, err := os.Stat(localPath); err == nil {
 		log.Printf("[MAC] Using existing local database: %s\n", localPath)
 		return nil
 	}
 
-	// 打开嵌入的压缩文件
 	compressedFile, err := ouiData.Open(embeddedFile)
 	if err != nil {
 		return err
 	}
 	defer compressedFile.Close()
 
-	// 创建gzip reader
 	gzReader, err := gzip.NewReader(compressedFile)
 	if err != nil {
 		return err
 	}
 	defer gzReader.Close()
 
-	// 创建本地文件
 	outFile, err := os.Create(localPath)
 	if err != nil {
 		return err
 	}
 	defer outFile.Close()
 
-	// 解压数据到本地文件
-	log.Printf("[MAC] Extracting database to: %s\n", localPath)
 	_, err = io.Copy(outFile, gzReader)
 	return err
 }
 
-// GetOUIDatabase 获取OUI数据库单例
 func GetOUIDatabase() *OUIDatabase {
 	ouiDBOnce.Do(func() {
 		ouiDB = &OUIDatabase{
@@ -86,17 +77,14 @@ func GetOUIDatabase() *OUIDatabase {
 	return ouiDB
 }
 
-// loadDatabase 加载OUI数据库
 func (db *OUIDatabase) loadDatabase() {
 	log.Println("[MAC] Loading OUI database...")
 
-	// 首先尝试解压嵌入的数据
 	if err := extractEmbeddedData(); err != nil {
 		log.Printf("[MAC] Failed to extract embedded data: %v\n", err)
 		return
 	}
 
-	// 打开本地数据文件
 	localPath := filepath.Join(localDataDir, localDataFile)
 	file, err := os.Open(localPath)
 	if err != nil {
@@ -113,30 +101,34 @@ func (db *OUIDatabase) loadDatabase() {
 
 	for scanner.Scan() {
 		line := scanner.Text()
+
 		if strings.TrimSpace(line) == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
 
-		parts := strings.SplitN(line, "\t", 2)
+		parts := strings.SplitN(line, " ", 2)
 		if len(parts) != 2 {
+			log.Printf("[MAC] Invalid line format: %s", line)
 			continue
 		}
 
-		oui := strings.ReplaceAll(parts[0], "-", "")
+		oui := strings.TrimSpace(parts[0])
 		manufacturer := strings.TrimSpace(parts[1])
-		manufacturer = strings.TrimPrefix(manufacturer, "(hex)\t")
 
 		db.manufacturers[oui] = manufacturer
 		count++
+	}
+
+	if err := scanner.Err(); err != nil {
+		log.Printf("[MAC] Scanner error: %v", err)
 	}
 
 	db.initialized = true
 	log.Printf("[MAC] Loaded %d OUI entries from %s\n", count, localPath)
 }
 
-// LookupManufacturer 查找MAC地址制造商
 func lookupManufacturer(mac string) string {
-	// 规范化MAC地址格式
+
 	mac = strings.ToUpper(strings.ReplaceAll(mac, ":", ""))
 	mac = strings.ReplaceAll(mac, "-", "")
 
@@ -145,7 +137,6 @@ func lookupManufacturer(mac string) string {
 		return "Unknown"
 	}
 
-	// 获取OUI（前6位）
 	oui := mac[:6]
 
 	db := GetOUIDatabase()
@@ -158,7 +149,7 @@ func lookupManufacturer(mac string) string {
 	}
 
 	if manufacturer, ok := db.manufacturers[oui]; ok {
-		log.Printf("[MAC] Found manufacturer for %s: %s\n", mac, manufacturer)
+
 		return manufacturer
 	}
 

@@ -16,9 +16,9 @@ type DCERPCDetector struct {
 	BaseDetector
 }
 
-func NewDCERPCDetector(timeout time.Duration) *DCERPCDetector {
+func NewDCERPCDetector() *DCERPCDetector {
 	return &DCERPCDetector{
-		BaseDetector: BaseDetector{timeout: timeout},
+		BaseDetector: BaseDetector{},
 	}
 }
 
