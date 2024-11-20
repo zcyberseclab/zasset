@@ -1,0 +1,59 @@
+name: Release Build
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.21'
+          
+      - name: Build Binaries
+        run: |
+          mkdir -p release
+          
+          # Linux (64-bit)
+          GOOS=linux GOARCH=amd64 go build -o release/zasset-linux-amd64 cmd/main.go
+          cd release && tar -czf zasset-linux-amd64.tar.gz zasset-linux-amd64 && cd ..
+          
+          # Linux (ARM64)
+          GOOS=linux GOARCH=arm64 go build -o release/zasset-linux-arm64 cmd/main.go
+          cd release && tar -czf zasset-linux-arm64.tar.gz zasset-linux-arm64 && cd ..
+          
+          # Windows (64-bit)
+          GOOS=windows GOARCH=amd64 go build -o release/zasset-windows-amd64.exe cmd/main.go
+          cd release && zip zasset-windows-amd64.zip zasset-windows-amd64.exe && cd ..
+          
+          # macOS (64-bit)
+          GOOS=darwin GOARCH=amd64 go build -o release/zasset-darwin-amd64 cmd/main.go
+          cd release && tar -czf zasset-darwin-amd64.tar.gz zasset-darwin-amd64 && cd ..
+          
+          # macOS (ARM64/M1)
+          GOOS=darwin GOARCH=arm64 go build -o release/zasset-darwin-arm64 cmd/main.go
+          cd release && tar -czf zasset-darwin-arm64.tar.gz zasset-darwin-arm64 && cd ..
+          
+          # Generate checksums
+          cd release && sha256sum zasset-* > checksums.txt && cd ..
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            release/zasset-linux-amd64.tar.gz
+            release/zasset-linux-arm64.tar.gz
+            release/zasset-windows-amd64.zip
+            release/zasset-darwin-amd64.tar.gz
+            release/zasset-darwin-arm64.tar.gz
+            release/checksums.txt
+          generate_release_notes: true
