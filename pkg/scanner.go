@@ -11,11 +11,15 @@ import (
 type Scanner struct {
 	config    *ScannerConfig
 	detectors []Detector
+	reporter  Reporter
 }
 
 type ScannerConfig struct {
 	ConfigPath   string
 	TemplatesDir string
+	ReportURL    string
+	DBType       string
+	DBDSN        string
 }
 
 func NewScanner(config *ScannerConfig) *Scanner {
@@ -24,13 +28,36 @@ func NewScanner(config *ScannerConfig) *Scanner {
 		detectors: []Detector{
 			NewZScanDetector(config),
 			NewPassiveDetector(),
-			//NewARPDetector(config.Interface),
 			NewPingDetector(),
 			NewDCERPCDetector(),
 			NewSNMPDetector(),
 			NewCameraDetector(),
 		},
 	}
+
+	reporterConfig := &ReporterConfig{
+		URL:    config.ReportURL,
+		DBType: config.DBType,
+		DBDSN:  config.DBDSN,
+	}
+
+	var reportType string
+	switch {
+	case config.ReportURL != "":
+		reportType = "http"
+	case config.DBType != "" || config.DBDSN != "":
+		reportType = "db"
+	default:
+		reportType = "console"
+	}
+
+	reporter, err := NewReporter(reportType, *reporterConfig)
+	if err != nil {
+		log.Printf("Failed to initialize reporter: %v", err)
+	} else {
+		s.reporter = reporter
+	}
+
 	return s
 }
 
@@ -92,6 +119,12 @@ func (s *Scanner) StartScan(target string) ([]stage.Node, error) {
 	resultMutex.RUnlock()
 
 	log.Printf("====== Scan completed. Total unique results: %d ======\n", len(allResults))
+
+	if s.reporter != nil && len(allResults) > 0 {
+		if err := s.reporter.Report(&allResults[0]); err != nil {
+			log.Printf("Failed to report results: %v\n", err)
+		}
+	}
 
 	if len(allResults) > 0 {
 		return allResults, nil

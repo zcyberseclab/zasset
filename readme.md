@@ -13,30 +13,35 @@ A fast, customizable service detection tool powered by a flexible fingerprint sy
   <a href="#-usage">Usage</a>
 </h4>
 
-## ✨Features
+## ✨ Features
 
-- **Fast Scanning Engine**: High-performance concurrent scanning
-- **Precise POC targeting**: 
-  - High-precision POC targeting via fingerprinting, faster and more accurate than traditional scanners
-- **Third-party Integration**:
-  - Censys integration for extended scanning
-  - Additional threat intelligence support
-- **Flexible Fingerprint System**: 
-  - Custom fingerprint definition support
-  - Multiple protocol support (HTTP, HTTPS, TCP)
-  - Pattern matching and response analysis
-- **Service Detection**:
-  - Web service identification
-  - Common application framework detection
-  - TLS/SSL configuration analysis
-- **Plugin System**:
-  - Extensible plugin architecture
-  - Hot-reload support
-  - Multi-language plugin support (Lua, YAML)
-- **Output Formats**:
-  - JSON output for integration
-  - Human-readable console output
-  - Custom report generation
+### Asset Discovery & Management
+- Comprehensive internal network asset identification
+- Service enumeration
+- MAC address detection
+- Operating system fingerprinting
+- IoT device recognition
+
+### Risk Assessment
+- Vulnerability analysis
+- Port exposure risk evaluation
+- Security configuration auditing
+
+### Detection Methods
+Multiple detection technologies integrated:
+- ZScan core scanning
+- Passive traffic analysis
+- PING detection
+- IoT protocol scanning
+- SNMP protocol detection
+- DECRPC detection
+- Camera device discovery
+- ARP detection
+
+### Key Advantages
+- High-speed scanning capabilities
+- Accurate asset identification
+- Rich vulnerability POC database
 
 ## 📦 Installation
 
@@ -58,14 +63,47 @@ zasset --target 192.168.1.1 --config /path/to/config.yaml
 # Use custom templates directory
 zasset --target 192.168.1.1 --templates-dir /path/to/templates
 
-# Enable geolocation lookup
-zasset --target 192.168.1.1 --geo
-
-# Use Censys integration
-zasset --target 192.168.1.1 --censys --censys-api-key <your-key> --censys-secret <your-secret>
-
 # Show version information
 zasset --version
+```
+
+### Passive Detection Mode
+
+```bash
+# Continuous monitoring mode
+zasset passive --interface eth0 --report-type http --report-url http://your-api.com/report
+
+# Time-limited monitoring (30 seconds)
+zasset passive --interface eth0 --duration 30s --report-type db --db-dsn "user:pass@tcp(127.0.0.1:3306)/dbname"
+
+# Combined with active scanning
+zasset --target 192.168.1.0/24 --enable-passive --passive-duration 30s
+```
+
+### Configuration Example
+
+```yaml
+passive_detector:
+  # Network interface to monitor
+  interface: eth0
+  
+  # Report configuration
+  report:
+    # Available types: http, database, console
+    type: http
+    # HTTP reporter settings
+    http:
+      url: http://your-api.com/report
+      headers:
+        Authorization: "Bearer your-token"
+    # Database reporter settings
+    database:
+      driver: mysql  # or postgresql
+      dsn: "user:pass@tcp(127.0.0.1:3306)/dbname"
+  
+  # Optional: Duration for time-limited detection
+  # Format: 30s, 1m, 1h, etc. Empty for continuous mode
+  duration: "30s"
 ```
 
 ### Using as a Go Library
@@ -75,45 +113,63 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
-	"os"
 	"time"
 
-	"github.com/zcyberseclab/zasset/pkg/stage"
+	zasset "github.com/zcyberseclab/zasset/pkg"
 )
+
+var (
+	Version   = "dev"
+	BuildTime = "unknown"
+	CommitSHA = "unknown"
+)
+
 func main() {
 	target := flag.String("target", "", "IP address or CIDR range to scan")
-	configPath := flag.String("config", "config/config.yaml", "Path to config file")
-	templatesDir := flag.String("templates-dir", "templates", "Path to templates directory")
-	 
+	configPath := flag.String("portconfig", "config/port_config.yaml", "Path to config file")
+	templatesDir := flag.String("templates", "templates", "Path to templates directory")
+	versionFlag := flag.Bool("version", false, "Show version information")
+
 	flag.Parse()
 
-	if *target == "" {
-		log.Fatal("CIDR range is required")
+	if *versionFlag {
+		fmt.Printf("Version: %s\n", Version)
+		fmt.Printf("Build Time: %s\n", BuildTime)
+		fmt.Printf("Git Commit: %s\n", CommitSHA)
+		return
 	}
- 
- 
-	scanner, err := stage.NewScanner(*configPath, *templatesDir, *enableGeo, *enableCensys, *censysAPIKey, *censysSecret)
-	if err != nil {
-		log.Fatalf("Failed to create scanner: %v", err)
-	}
-	defer scanner.Close()
 
-	// Perform scan
+	if *target == "" {
+		log.Fatal("Target is required")
+	}
+
 	startTime := time.Now()
-	results, err := scanner.Scan(*target)
+
+	scanner := zasset.NewScanner(&zasset.ScannerConfig{
+		ConfigPath:   *configPath,
+		TemplatesDir: *templatesDir,
+	})
+	nodes, err := scanner.StartScan(*target)
 	if err != nil {
 		log.Fatalf("Scan failed: %v", err)
 	}
 
-	// Print results
-	if err := stage.PrintResults(results); err != nil {
-		log.Printf("Error printing results: %v", err)
+	for _, node := range nodes {
+		fmt.Printf("Found host: %s\n", node.IP)
+		if node.Hostname != "" {
+			fmt.Printf("  Hostname: %s\n", node.Hostname)
+		}
+		if len(node.Ports) > 0 {
+			fmt.Printf("  Open ports: %s\n", zasset.ServiceInfoToString(node.Ports))
+		}
 	}
 
 	duration := time.Since(startTime)
 	log.Printf("\nScan completed in: %v\n", duration)
 }
+
 ```
 ## How to build oui.txt
 ```bash
