@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"strings"
 	"syscall"
 	"time"
@@ -74,17 +75,22 @@ func main() {
 		fmt.Printf("Git Commit: %s\n", CommitSHA)
 		return
 	}
-
-	// 准备基础配置
+ 
 	baseConfig := &zasset.ScannerConfig{
 		ConfigPath:   *configPath,
 		TemplatesDir: *templatesDir,
-		ReportURL:    *reportURL,
-		DBType:       *dbType,
-		DBDSN:        *dbDSN,
 		NetworkCard:  *networkCard,
 	}
-
+ 
+	reporterConfig := &zasset.ReporterConfig{
+		EnableConsole: true, // 总是启用控制台输出
+		HTTPEndpoint:  *reportURL,
+		Driver:        *dbType,
+		DSN:           *dbDSN,
+	}
+ 
+	zasset.InitMultiReporter(reporterConfig)
+ 
 	activeCfg := *baseConfig
 	activeCfg.ScannerType = zasset.ActiveScanner
 	activeScanner := zasset.NewScanner(&activeCfg)
@@ -94,7 +100,7 @@ func main() {
 	//passiveCfg.PassiveTimeout = *passiveTimeout
 	//passiveScanner := zasset.NewScanner(&passiveCfg)
 
-	// 准备结果收集
+ 
 	var results []stage.Node
 	startTime := time.Now()
 
@@ -144,16 +150,27 @@ func main() {
 
 	// Start scanning in a goroutine
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("Recovered from panic in active scanner: %v", r)
+				debug.PrintStack()
+				done <- struct{}{}
+				return
+			}
+		}()
+
 		if activeScanner != nil {
 			activeNodes, err := activeScanner.Start(targets)
 			if err != nil {
 				log.Printf("Active scanner failed: %v", err)
-			} else {
-				results = append(results, activeNodes...)
+			} else if activeNodes != nil {
+				for _, node := range activeNodes {
+					results = append(results, node)
+				}
 				log.Printf("[Main] Active scanner completed, found %d nodes", len(activeNodes))
 			}
 		}
-		done <- struct{}{} // 只在扫描真正完成后发送信号
+		done <- struct{}{}
 	}()
 
 	// Handle interrupts and timeouts
@@ -186,20 +203,5 @@ func main() {
 	log.Printf("Target Preparation Time: %v", timings["target_preparation"])
 	log.Printf("Active Scanning Time: %v", timings["active_scanning"])
 	log.Printf("Total Nodes Discovered: %d", len(results))
-
-	// Print detailed results
-	log.Printf("\n=== Detailed Results ===")
-	for i, node := range results {
-		log.Printf("\nNode #%d:", i+1)
-		log.Printf("  IP: %s", node.IP)
-		log.Printf("  MAC: %s", node.MAC)
-		if node.Hostname != "" {
-			log.Printf("  Hostname: %s", node.Hostname)
-		}
-		if node.Manufacturer != "" {
-			log.Printf("  Manufacturer: %s", node.Manufacturer)
-		}
-
-		log.Printf("  ---")
-	}
+ 
 }

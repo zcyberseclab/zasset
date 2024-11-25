@@ -3,6 +3,7 @@ package zasset
 import (
 	"fmt"
 	"log"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -24,9 +25,6 @@ type ScannerConfig struct {
 	NetworkCard    string
 	Targets        []string
 	ScannerType    ScannerType
-	ReportURL      string
-	DBType         string
-	DBDSN          string
 }
 
 type Scanner struct {
@@ -83,6 +81,24 @@ func (s *Scanner) startActiveScan(targets []string) ([]stage.Node, error) {
 	nodeMap := make(map[string]*stage.Node)
 	var nodesMutex sync.Mutex
 
+	// 创建工作池来并行处理目标
+	targetWg := sync.WaitGroup{}
+	maxConcurrent := runtime.GOMAXPROCS(0) * 2 // 根据CPU核心数动态调整
+	semaphore := make(chan struct{}, maxConcurrent)
+
+	// 添加detector级别的并发控制
+	maxDetectorConcurrent := 5 // 每个目标允许同时运行的detector数量
+	detectorSemaphore := make(chan struct{}, maxDetectorConcurrent)
+
+	// 为不同的detector设置不同的超时时间
+	timeouts := map[string]time.Duration{
+		"SNMPDetector":   15 * time.Second,
+		"ZScanDetector":  30 * time.Second,
+		"PingDetector":   20 * time.Second,
+		"DCERPCDetector": 5 * time.Second,
+		"CameraDetector": 5 * time.Second,
+	}
+
 	for _, target := range targets {
 		select {
 		case <-s.stopChan:
@@ -91,67 +107,96 @@ func (s *Scanner) startActiveScan(targets []string) ([]stage.Node, error) {
 		default:
 		}
 
-		log.Printf("[Scanner] Actively scanning target: %s", target)
+		targetWg.Add(1)
+		go func(target string) {
+			defer targetWg.Done()
+			semaphore <- struct{}{}        // 获取信号量
+			defer func() { <-semaphore }() // 释放信号量
 
-		var detectorWg sync.WaitGroup
-		detectorWg.Add(len(s.detectors))
+			log.Printf("[Scanner] Actively scanning target: %s", target)
 
-		// 为每个detector设置超时
-		for _, detector := range s.detectors {
-			go func(d Detector, t string) {
-				defer detectorWg.Done()
+			var detectorWg sync.WaitGroup
+			detectorWg.Add(len(s.detectors))
 
-				detectorName := d.Name()
-				log.Printf("[Scanner] Starting detector %s for target %s", detectorName, t)
+			for _, detector := range s.detectors {
+				go func(d Detector, t string) {
+					defer detectorWg.Done()
 
-				// 添加超时控制
-				done := make(chan bool)
-				var nodes []stage.Node
-				var err error
+					detectorName := d.Name()
+					log.Printf("[Scanner] Starting detector %s for target %s", detectorName, t)
 
-				go func() {
-					nodes, err = d.Detect(t)
-					done <- true
-				}()
+					done := make(chan bool)
+					var nodes []stage.Node
+					var err error
 
-				// 30秒超时
-				select {
-				case <-done:
-					if err != nil {
-						log.Printf("[Scanner] Detector %s failed for target %s: %v", detectorName, t, err)
+					go func() {
+						detectorSemaphore <- struct{}{} // 获取信号量
+						nodes, err = d.Detect(t)
+						done <- true
+					}()
+
+					// 在detector执行时使用对应的超时时间
+					timeout := timeouts[detectorName]
+					select {
+					case <-done:
+						if err != nil {
+							log.Printf("[Scanner] Detector %s failed for target %s: %v", detectorName, t, err)
+							return
+						}
+					case <-time.After(timeout):
+						log.Printf("[Scanner] Detector %s timed out for target %s", detectorName, t)
 						return
 					}
-				case <-time.After(30 * time.Second):
-					log.Printf("[Scanner] Detector %s timed out for target %s", detectorName, t)
-					return
-				}
 
-				if len(nodes) > 0 {
-					log.Printf("[Scanner] Detector %s found %d nodes for target %s", detectorName, len(nodes), t)
-					s.incrementDiscoveredHosts(len(nodes))
+					if len(nodes) > 0 {
+						log.Printf("[Scanner] Detector %s found %d nodes for target %s", detectorName, len(nodes), t)
+						s.incrementDiscoveredHosts(len(nodes))
 
-					nodesMutex.Lock()
-					for _, node := range nodes {
-						if existing, exists := nodeMap[node.IP]; exists {
-							MergeNodes(existing, &node)
-						} else {
-							nodeCopy := node
-							nodeMap[node.IP] = &nodeCopy
+						nodesMutex.Lock()
+						var nodeBatch []*stage.Node
+						batchSize := 100
+						for _, node := range nodes {
+							if existing, exists := nodeMap[node.IP]; exists {
+								MergeNodes(existing, &node)
+							} else {
+								nodeCopy := node
+								nodeMap[node.IP] = &nodeCopy
+								nodeBatch = append(nodeBatch, &nodeCopy)
+							}
+
+							if len(nodeBatch) >= batchSize {
+								// 批量报告
+								if reporter, err := GetMultiReporter(); err == nil {
+									reporter.ReportNodes(nodeBatch)
+								}
+								nodeBatch = nodeBatch[:0]
+							}
 						}
+						nodesMutex.Unlock()
+					} else {
+						log.Printf("[Scanner] Detector %s found no nodes for target %s", detectorName, t)
 					}
-					nodesMutex.Unlock()
-				} else {
-					log.Printf("[Scanner] Detector %s found no nodes for target %s", detectorName, t)
-				}
-			}(detector, target)
-		}
 
-		// 等待所有detector完成或超时
-		detectorWg.Wait()
+					<-detectorSemaphore // 释放信号量
+				}(detector, target)
+			}
+
+			detectorWg.Wait()
+		}(target)
 	}
+
+	targetWg.Wait()
 
 	// 将 map 转换回切片
 	for _, node := range nodeMap {
+		reporter, err := GetMultiReporter()
+		if err != nil {
+			log.Printf("[Scanner] Warning: Failed to get reporter: %v", err)
+			continue
+		}
+		if err := reporter.Report(node); err != nil {
+			log.Printf("[Scanner] Warning: Failed to report node %s: %v", node.IP, err)
+		}
 		allNodes = append(allNodes, *node)
 	}
 
@@ -192,11 +237,9 @@ func (s *Scanner) startPassiveScan() ([]stage.Node, error) {
 				nodesMutex.Lock()
 				for _, node := range nodes {
 					if existing, exists := nodeMap[node.IP]; exists {
-						// 合并已存在节点的信息
 						MergeNodes(existing, &node)
 					} else {
-						// 新建节点
-						nodeCopy := node // 创建副本
+						nodeCopy := node
 						nodeMap[node.IP] = &nodeCopy
 					}
 				}
@@ -206,6 +249,18 @@ func (s *Scanner) startPassiveScan() ([]stage.Node, error) {
 	}
 
 	detectorWg.Wait()
+
+	// Report merged nodes after all detections are complete
+	for _, node := range nodeMap {
+		reporter, err := GetMultiReporter()
+		if err != nil {
+			log.Printf("[Scanner] Warning: Failed to get reporter: %v", err)
+			continue
+		}
+		if err := reporter.Report(node); err != nil {
+			log.Printf("[Scanner] Warning: Failed to report node %s: %v", node.IP, err)
+		}
+	}
 
 	// 将 map 转换回切片
 	for _, node := range nodeMap {
