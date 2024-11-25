@@ -4,211 +4,280 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/zcyberseclab/zscan/pkg/stage"
 )
 
-type Scanner struct {
-	config    *ScannerConfig
-	detectors []Detector
-	reporter  Reporter
-}
+type ScannerType int
+
+const (
+	ActiveScanner ScannerType = iota
+	PassiveScanner
+)
 
 type ScannerConfig struct {
-	ConfigPath   string
-	TemplatesDir string
-	ReportURL    string
-	DBType       string
-	DBDSN        string
+	ConfigPath     string
+	TemplatesDir   string
+	PassiveTimeout int
+	NetworkCard    string
+	Targets        []string
+	ScannerType    ScannerType
+	ReportURL      string
+	DBType         string
+	DBDSN          string
+}
+
+type Scanner struct {
+	config          *ScannerConfig
+	detectors       []Detector
+	stopChan        chan struct{}
+	wg              sync.WaitGroup
+	discoveredHosts int32
 }
 
 func NewScanner(config *ScannerConfig) *Scanner {
 	s := &Scanner{
-		config: config,
-		detectors: []Detector{
+		config:   config,
+		stopChan: make(chan struct{}),
+	}
+
+	if config.ScannerType == ActiveScanner {
+		s.detectors = []Detector{
 			NewZScanDetector(config),
-			NewPassiveDetector(),
 			NewPingDetector(),
 			NewDCERPCDetector(),
 			NewSNMPDetector(),
 			NewCameraDetector(),
-		},
-	}
-
-	reporterConfig := &ReporterConfig{
-		URL:    config.ReportURL,
-		DBType: config.DBType,
-		DBDSN:  config.DBDSN,
-	}
-
-	var reportType string
-	switch {
-	case config.ReportURL != "":
-		reportType = "http"
-	case config.DBType != "" || config.DBDSN != "":
-		reportType = "db"
-	default:
-		reportType = "console"
-	}
-
-	reporter, err := NewReporter(reportType, *reporterConfig)
-	if err != nil {
-		log.Printf("Failed to initialize reporter: %v", err)
+		}
 	} else {
-		s.reporter = reporter
+		s.detectors = []Detector{
+			NewPassiveDetector(),
+		}
 	}
 
 	return s
 }
 
-func (s *Scanner) StartScan(target string) ([]stage.Node, error) {
+// Start is the unified entry point for both active and passive scanning
+func (s *Scanner) Start(targets []string) ([]stage.Node, error) {
+	if s.config.ScannerType == ActiveScanner {
+		return s.startActiveScan(targets)
+	}
+	return s.startPassiveScan()
+}
 
-	resultMap := make(map[string]*stage.Node)
-	var resultMutex sync.RWMutex
+// startActiveScan handles active scanning
+func (s *Scanner) startActiveScan(targets []string) ([]stage.Node, error) {
+	s.wg.Add(1)
+	defer s.wg.Done()
 
-	var wg sync.WaitGroup
-	errChan := make(chan error, len(s.detectors))
+	log.Printf("[Scanner] Starting active scan for targets: %v", targets)
 
+	if len(s.detectors) == 0 {
+		return nil, fmt.Errorf("no detectors initialized")
+	}
+
+	var allNodes []stage.Node
+	nodeMap := make(map[string]*stage.Node)
+	var nodesMutex sync.Mutex
+
+	for _, target := range targets {
+		select {
+		case <-s.stopChan:
+			log.Printf("[Scanner] Scan stopped before processing target: %s", target)
+			return allNodes, nil
+		default:
+		}
+
+		log.Printf("[Scanner] Actively scanning target: %s", target)
+
+		var detectorWg sync.WaitGroup
+		detectorWg.Add(len(s.detectors))
+
+		// 为每个detector设置超时
+		for _, detector := range s.detectors {
+			go func(d Detector, t string) {
+				defer detectorWg.Done()
+
+				detectorName := d.Name()
+				log.Printf("[Scanner] Starting detector %s for target %s", detectorName, t)
+
+				// 添加超时控制
+				done := make(chan bool)
+				var nodes []stage.Node
+				var err error
+
+				go func() {
+					nodes, err = d.Detect(t)
+					done <- true
+				}()
+
+				// 30秒超时
+				select {
+				case <-done:
+					if err != nil {
+						log.Printf("[Scanner] Detector %s failed for target %s: %v", detectorName, t, err)
+						return
+					}
+				case <-time.After(30 * time.Second):
+					log.Printf("[Scanner] Detector %s timed out for target %s", detectorName, t)
+					return
+				}
+
+				if len(nodes) > 0 {
+					log.Printf("[Scanner] Detector %s found %d nodes for target %s", detectorName, len(nodes), t)
+					s.incrementDiscoveredHosts(len(nodes))
+
+					nodesMutex.Lock()
+					for _, node := range nodes {
+						if existing, exists := nodeMap[node.IP]; exists {
+							MergeNodes(existing, &node)
+						} else {
+							nodeCopy := node
+							nodeMap[node.IP] = &nodeCopy
+						}
+					}
+					nodesMutex.Unlock()
+				} else {
+					log.Printf("[Scanner] Detector %s found no nodes for target %s", detectorName, t)
+				}
+			}(detector, target)
+		}
+
+		// 等待所有detector完成或超时
+		detectorWg.Wait()
+	}
+
+	// 将 map 转换回切片
+	for _, node := range nodeMap {
+		allNodes = append(allNodes, *node)
+	}
+
+	log.Printf("[Scanner] Active scan completed for targets: %v", targets)
+	return allNodes, nil
+}
+
+// startPassiveScan handles passive scanning
+func (s *Scanner) startPassiveScan() ([]stage.Node, error) {
+	s.wg.Add(1)
+	defer s.wg.Done()
+
+	log.Printf("[Scanner] Starting passive scan")
+
+	if len(s.detectors) == 0 {
+		return nil, fmt.Errorf("no detectors initialized")
+	}
+
+	var allNodes []stage.Node
+	nodeMap := make(map[string]*stage.Node) // 使用 map 来存储和合并节点
+	var nodesMutex sync.Mutex
+	var detectorWg sync.WaitGroup
+
+	detectorWg.Add(len(s.detectors))
+
+	// 并行执行所有passive detector
 	for _, detector := range s.detectors {
-		wg.Add(1)
 		go func(d Detector) {
-			defer wg.Done()
+			defer detectorWg.Done()
 
-			results, err := d.Detect(target)
+			nodes, err := d.Detect("")
 			if err != nil {
-				log.Printf("Detector %s failed: %v\n", d.Name(), err)
-				errChan <- fmt.Errorf("detector %s failed: %v", d.Name(), err)
+				log.Printf("[Scanner] Passive detector %s failed: %v", d.Name(), err)
 				return
 			}
 
-			if results != nil {
-				log.Printf("Detector %s found %d results\n", d.Name(), len(results))
-
-				resultMutex.Lock()
-				for _, node := range results {
-					if existing, exists := resultMap[node.IP]; exists {
-
-						mergeNodes(existing, &node)
+			if len(nodes) > 0 {
+				nodesMutex.Lock()
+				for _, node := range nodes {
+					if existing, exists := nodeMap[node.IP]; exists {
+						// 合并已存在节点的信息
+						MergeNodes(existing, &node)
 					} else {
-
-						nodeCopy := node
-						resultMap[node.IP] = &nodeCopy
+						// 新建节点
+						nodeCopy := node // 创建副本
+						nodeMap[node.IP] = &nodeCopy
 					}
 				}
-				resultMutex.Unlock()
-			} else {
-				log.Printf("Detector %s returned no results\n", d.Name())
+				nodesMutex.Unlock()
 			}
 		}(detector)
 	}
 
-	// 等待所有探测器完成
-	wg.Wait()
-	close(errChan)
+	detectorWg.Wait()
 
-	var errs []error
-	for err := range errChan {
-		errs = append(errs, err)
+	// 将 map 转换回切片
+	for _, node := range nodeMap {
+		allNodes = append(allNodes, *node)
 	}
 
-	var allResults []stage.Node
-	resultMutex.RLock()
-	for _, node := range resultMap {
-		allResults = append(allResults, *node)
-	}
-	resultMutex.RUnlock()
+	return allNodes, nil
+}
 
-	log.Printf("====== Scan completed. Total unique results: %d ======\n", len(allResults))
+func (s *Scanner) Stop() {
+	close(s.stopChan)
+	s.wg.Wait()
 
-	if s.reporter != nil && len(allResults) > 0 {
-		if err := s.reporter.Report(&allResults[0]); err != nil {
-			log.Printf("Failed to report results: %v\n", err)
+	for _, detector := range s.detectors {
+		if closer, ok := detector.(interface{ Close() }); ok {
+			closer.Close()
 		}
 	}
 
-	if len(allResults) > 0 {
-		return allResults, nil
-	} else {
-		log.Printf("No results found for target: %s\n", target)
-		return nil, nil
-	}
-
+	log.Printf("Scanner stopped successfully")
 }
 
-func mergeNodes(existing *stage.Node, new *stage.Node) {
-	// 只更新非空字段
+func MergeNodes(existing *stage.Node, new *stage.Node) {
+	// 合并端口信息
+	for _, newPort := range new.Ports {
+		portExists := false
+		for _, existingPort := range existing.Ports {
+			if newPort == existingPort {
+				portExists = true
+				break
+			}
+		}
+		if !portExists {
+			existing.Ports = append(existing.Ports, newPort)
+		}
+	}
+
+	// 合并主机名（如果新的非空）
 	if new.Hostname != "" {
 		existing.Hostname = new.Hostname
 	}
-	if new.MAC != "" {
-		existing.MAC = new.MAC
-	}
+
+	// 合并操作系统信息（如果新的非空）
 	if new.OS != "" {
 		existing.OS = new.OS
 	}
-	if new.Manufacturer != "" {
-		existing.Manufacturer = new.Manufacturer
-	}
-	if new.Domain != "" {
-		existing.Domain = new.Domain
-	}
+
+	// 合并设备类型（如果新的非空）
 	if new.Devicetype != "" {
 		existing.Devicetype = new.Devicetype
 	}
 
-	// 合并端口信息
-	if len(new.Ports) > 0 {
-		if existing.Ports == nil {
-			existing.Ports = []*stage.ServiceInfo{}
-		}
-		// 合并端口，避免重复
-		portMap := make(map[int]bool)
-		for _, port := range existing.Ports {
-			portMap[port.Port] = true
-		}
-		for _, port := range new.Ports {
-			if !portMap[port.Port] {
-				existing.Ports = append(existing.Ports, port)
-			}
-		}
-	}
-
-	// 合并敏感信息
-	if len(new.SensitiveInfo) > 0 {
-		if existing.SensitiveInfo == nil {
-			existing.SensitiveInfo = []string{}
-		}
-		// 合并敏感信息，避免重复
-		infoMap := make(map[string]bool)
-		for _, info := range existing.SensitiveInfo {
-			infoMap[info] = true
-		}
-		for _, info := range new.SensitiveInfo {
-			if !infoMap[info] {
-				existing.SensitiveInfo = append(existing.SensitiveInfo, info)
-			}
-		}
-	}
-
 	// 合并标签
-	if len(new.Tags) > 0 {
-		if existing.Tags == nil {
-			existing.Tags = make([]string, 0)
+	for _, newTag := range new.Tags {
+		tagExists := false
+		for _, existingTag := range existing.Tags {
+			if newTag == existingTag {
+				tagExists = true
+				break
+			}
 		}
-		existing.Tags = append(existing.Tags, new.Tags...)
-		// 去重
-		existing.Tags = uniqueStrings(existing.Tags)
+		if !tagExists {
+			existing.Tags = append(existing.Tags, newTag)
+		}
 	}
+
 }
 
-func uniqueStrings(slice []string) []string {
-	seen := make(map[string]struct{})
-	result := make([]string, 0)
-	for _, str := range slice {
-		if _, exists := seen[str]; !exists {
-			seen[str] = struct{}{}
-			result = append(result, str)
-		}
-	}
-	return result
+func (s *Scanner) incrementDiscoveredHosts(count int) {
+	atomic.AddInt32(&s.discoveredHosts, int32(count))
+}
+
+func (s *Scanner) GetDiscoveredHosts() int {
+	return int(atomic.LoadInt32(&s.discoveredHosts))
 }

@@ -1,6 +1,9 @@
 package zasset
 
-import "net"
+import (
+	"fmt"
+	"net"
+)
 
 func getIPsFromCIDR(cidr string) ([]string, error) {
 	ip, ipnet, err := net.ParseCIDR(cidr)
@@ -27,4 +30,33 @@ func incrementIP(ip net.IP) {
 			break
 		}
 	}
+}
+
+// GetLocalNetworkIPs 获取本地网络IP地址列表
+func GetLocalNetworkIPs() ([]string, error) {
+	var ips []string
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get network interfaces: %v", err)
+	}
+
+	for _, iface := range interfaces {
+		if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 {
+			continue
+		}
+
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+
+		for _, addr := range addrs {
+			if ipnet, ok := addr.(*net.IPNet); ok {
+				if ipv4 := ipnet.IP.To4(); ipv4 != nil && ipv4.IsPrivate() {
+					ips = append(ips, ipv4.String())
+				}
+			}
+		}
+	}
+	return ips, nil
 }

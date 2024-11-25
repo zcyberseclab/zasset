@@ -2,6 +2,7 @@ package zasset
 
 import (
 	"log"
+	"net"
 
 	"github.com/zcyberseclab/zscan/pkg/stage"
 )
@@ -27,8 +28,22 @@ func (z *ZScanDetector) Name() string {
 }
 
 func (z *ZScanDetector) Detect(target string) ([]stage.Node, error) {
-	log.Printf("[ZScan] Starting detection for target: %s\n", target)
+	log.Printf("\n[ZScanDetector] ========== Starting Detection ==========")
+	log.Printf("[ZScanDetector] Target: %s", target)
+	log.Printf("[ZScanDetector] Configuration:")
+	log.Printf("  - Config Path: %s", z.configPath)
+	log.Printf("  - Templates Dir: %s", z.templatesDir)
 
+	// 解析目标网段
+	_, ipNet, err := net.ParseCIDR(target)
+	if err != nil {
+		log.Printf("[ZScanDetector] Failed to parse target CIDR %s: %v", target, err)
+		return nil, err
+	}
+	log.Printf("[ZScanDetector] Parsed network range: %s", ipNet.String())
+
+	// 初始化扫描器
+	log.Printf("[ZScanDetector] Initializing scanner...")
 	scanner, err := stage.NewScanner(
 		z.configPath,
 		z.templatesDir,
@@ -38,18 +53,34 @@ func (z *ZScanDetector) Detect(target string) ([]stage.Node, error) {
 		"",
 	)
 	if err != nil {
-		log.Printf("[ZScan] Failed to initialize scanner: %v\n", err)
+		log.Printf("[ZScanDetector] Failed to initialize scanner: %v", err)
 		return nil, err
 	}
 	defer scanner.Close()
+	log.Printf("[ZScanDetector] Scanner initialized successfully")
 
 	// 执行扫描
+	log.Printf("[ZScanDetector] Starting scan for network: %s", target)
 	nodes, err := scanner.Scan(target)
 	if err != nil {
-		log.Printf("[ZScan] Scan failed: %v\n", err)
+		log.Printf("[ZScanDetector] Scan failed: %v", err)
 		return nil, err
 	}
 
-	log.Printf("[ZScan] Found %d nodes for target: %s\n", len(nodes), target)
+	// 详细的结果统计
+	log.Printf("[ZScanDetector] Scan completed for target: %s", target)
+	log.Printf("[ZScanDetector] Results summary:")
+	log.Printf("  - Total nodes found: %d", len(nodes))
+	for i, node := range nodes {
+		log.Printf("  - Node %d:", i+1)
+		log.Printf("    * IP: %s", node.IP)
+		var portNumbers []int
+		for _, port := range node.Ports {
+			portNumbers = append(portNumbers, int(port.Port))
+		}
+		log.Printf("    * Ports: %v", portNumbers)
+	}
+	log.Printf("[ZScanDetector] ========== Detection Completed ==========\n")
+
 	return nodes, nil
 }

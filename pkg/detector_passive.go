@@ -1,13 +1,10 @@
 package zasset
 
 import (
-	"bytes"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"sync"
-	"time"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
@@ -33,9 +30,16 @@ func (p *PassiveDetector) Name() string {
 }
 func (p *PassiveDetector) getNodes() ([]stage.Node, error) {
 	log.Printf("[Passive] Getting collected nodes...\n")
-	// Implementation for getting nodes
-	// You'll need to implement the logic to retrieve nodes
-	return nil, nil
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	nodes := make([]stage.Node, 0, len(p.assets))
+	for _, node := range p.assets {
+		nodes = append(nodes, *node)
+	}
+
+	return nodes, nil
 }
 
 func (p *PassiveDetector) Detect(target string) ([]stage.Node, error) {
@@ -64,89 +68,69 @@ func (p *PassiveDetector) Detect(target string) ([]stage.Node, error) {
 }
 
 func (p *PassiveDetector) capturePackets(handle *pcap.Handle) error {
-	// 创建数据包源
 	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
-
-	// 创建一个map来存储已发现的设备，避免重复处理
 	discovered := make(map[string]*stage.Node)
-	var mu sync.Mutex // 添加互斥锁保护map
+	var mu sync.Mutex
 
-	fmt.Println("\nStarting packet capture. Discovering devices...")
-	fmt.Println("----------------------------------------")
+	fmt.Println("[passive] Starting packet capture...")
 
-	// 设置超时通道
-	timeout := time.After(5 * time.Minute)
+	// 创建一个done通道用于外部控制
+	done := make(chan bool)
+	defer close(done)
 
-	for {
-		select {
-		case <-timeout:
-			// 转换discovered map为节点列表
-			var nodes []stage.Node
-			mu.Lock()
-			for _, node := range discovered {
-				nodes = append(nodes, *node)
+	// 启动一个goroutine来处理数据包
+	go func() {
+		for packet := range packetSource.Packets() {
+			select {
+			case <-done:
+				return
+			default:
+				if packet == nil {
+					continue
+				}
+
+				// ... 数据包处理代码 ...
+				ethernetLayer := packet.Layer(layers.LayerTypeEthernet)
+				if ethernetLayer == nil {
+					continue
+				}
+				eth := ethernetLayer.(*layers.Ethernet)
+
+				// 忽略广播地址
+				if eth.DstMAC.String() == "ff:ff:ff:ff:ff:ff" {
+					continue
+				}
+
+				// 忽略组播地址
+				if eth.DstMAC[0]&0x01 == 1 {
+					continue
+				}
+
+				// 获取IP层
+				ipLayer := packet.Layer(layers.LayerTypeIPv4)
+				if ipLayer == nil {
+					continue
+				}
+				ip := ipLayer.(*layers.IPv4)
+
+				// 忽略本地回环地址
+				if ip.SrcIP.IsLoopback() || ip.DstIP.IsLoopback() {
+					continue
+				}
+
+				// 处理源设备和目标设备
+				p.processNode(eth.SrcMAC, ip.SrcIP, discovered, &mu)
+				p.processNode(eth.DstMAC, ip.DstIP, discovered, &mu)
 			}
-			mu.Unlock()
-
-			// 保存到p.assets
-			p.mu.Lock()
-			for ip, node := range discovered {
-				p.assets[ip] = node
-			}
-			p.mu.Unlock()
-
-			return nil
-
-		default:
-			packet, err := packetSource.NextPacket()
-			if err == io.EOF {
-				return nil
-			} else if err != nil {
-				continue
-			}
-
-			// 获取以太网层
-			ethernetLayer := packet.Layer(layers.LayerTypeEthernet)
-			if ethernetLayer == nil {
-				continue
-			}
-			eth := ethernetLayer.(*layers.Ethernet)
-
-			// 忽略广播地址
-			if eth.DstMAC.String() == "ff:ff:ff:ff:ff:ff" {
-				continue
-			}
-
-			// 忽略组播地址
-			if eth.DstMAC[0]&0x01 == 1 {
-				continue
-			}
-
-			// 获取IP层
-			ipLayer := packet.Layer(layers.LayerTypeIPv4)
-			if ipLayer == nil {
-				continue
-			}
-			ip := ipLayer.(*layers.IPv4)
-
-			// 忽略本地回环地址
-			if ip.SrcIP.IsLoopback() || ip.DstIP.IsLoopback() {
-				continue
-			}
-
-			// 处理源设备
-			p.processNode(eth.SrcMAC, ip.SrcIP, discovered, &mu)
-
-			// 处理目标设备
-			p.processNode(eth.DstMAC, ip.DstIP, discovered, &mu)
 		}
-	}
+	}()
+
+	return nil
 }
 
 // 处理单个节点的辅助函数
 func (p *PassiveDetector) processNode(mac net.HardwareAddr, ip net.IP, discovered map[string]*stage.Node, mu *sync.Mutex) {
-	// 检查是否为内网地址
-	if !isPrivateIP(ip) {
+	if !ip.IsPrivate() {
 		return
 	}
 
@@ -164,64 +148,32 @@ func (p *PassiveDetector) processNode(mac net.HardwareAddr, ip net.IP, discovere
 			MAC: macStr,
 		}
 
-		// 标准化 MAC 地址格式并查找制造商信息
 		manufacturer := lookupManufacturer(macStr)
 		if manufacturer != "" {
 			node.Manufacturer = manufacturer
-
 		}
 
+		// 添加到discovered map和assets
 		discovered[ipStr] = node
+		p.mu.Lock()
+		p.assets[ipStr] = node
+		p.mu.Unlock()
 
-		// 打印发现的设备信息
-		fmt.Printf("New internal device discovered:\n")
-		fmt.Printf("  IP: %s\n", ipStr)
-		fmt.Printf("  MAC: %s\n", macStr)
-		if node.Manufacturer != "" {
-			fmt.Printf("  Manufacturer: %s\n", node.Manufacturer)
+		// 打印发现信息
+		fmt.Printf("[passive] New internal device discovered: IP=%s, MAC=%s\n", ipStr, macStr)
+
+		// 获取reporter并上报新发现的节点
+		reporter, err := GetMultiReporter()
+		if err != nil {
+			log.Printf("[passive] Failed to get reporter: %v\n", err)
+			return
 		}
-		if node.Devicetype != "" {
-			fmt.Printf("  Device Type: %s\n", node.Devicetype)
-		}
-		fmt.Println("----------------------------------------")
-	}
-}
 
-// 检查是否为内网地址
-func isPrivateIP(ip net.IP) bool {
-	// 定义内网地址范围
-	privateRanges := []struct {
-		start net.IP
-		end   net.IP
-	}{
-		{
-			net.ParseIP("10.0.0.0"),
-			net.ParseIP("10.255.255.255"),
-		},
-		{
-			net.ParseIP("172.16.0.0"),
-			net.ParseIP("172.31.255.255"),
-		},
-		{
-			net.ParseIP("192.168.0.0"),
-			net.ParseIP("192.168.255.255"),
-		},
-	}
-
-	// 转换为IPv4
-	ipv4 := ip.To4()
-	if ipv4 == nil {
-		return false
-	}
-
-	// 检查是否在内网范围内
-	for _, r := range privateRanges {
-		if bytes.Compare(ipv4, r.start.To4()) >= 0 && bytes.Compare(ipv4, r.end.To4()) <= 0 {
-			return true
+		// 上报新节点，使用正确的函数签名
+		if err := reporter.Report(node); err != nil {
+			log.Printf("[passive] Failed to report new node: %v\n", err)
 		}
 	}
-
-	return false
 }
 
 func (p *PassiveDetector) openInterface() (*pcap.Handle, error) {
