@@ -128,7 +128,6 @@ func (a *ARPDetector) sendARPRequests(ctx context.Context, ips []string) ([]stag
 
 	// 收集结果
 	var nodes []stage.Node
-	var errs []error
 
 	// 从通道读取结果和错误
 	for {
@@ -143,7 +142,7 @@ func (a *ARPDetector) sendARPRequests(ctx context.Context, ips []string) ([]stag
 			if !ok {
 				continue
 			}
-			errs = append(errs, err)
+			log.Printf("[ARP] Error during scan: %v", err)
 		case <-ctx.Done():
 			return nodes, ctx.Err()
 		}
@@ -159,10 +158,8 @@ func (a *ARPDetector) Name() string {
 }
 
 func (a *ARPDetector) Detect(target string) ([]stage.Node, error) {
-
 	// Convert single target to slice
 	targets := []string{target}
-
 	// Create a context
 	ctx := context.Background()
 

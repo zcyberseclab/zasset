@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"net"
 	"sync"
 	"time"
@@ -88,7 +89,9 @@ func (d *CameraDetector) receiveResponses(conn *net.UDPConn, manufacturer string
 	buffer := make([]byte, 2048)
 
 	// 设置读取超时
-	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		log.Printf("Failed to set read deadline: %v", err)
+	}
 
 	for {
 		n, remoteAddr, err := conn.ReadFromUDP(buffer)
@@ -155,20 +158,15 @@ func NewCameraDetector() *CameraDetector {
 		BaseDetector: BaseDetector{},
 	}
 }
-
 func (d *CameraDetector) Name() string {
 	return "CameraDetector"
 }
-
 func (d *CameraDetector) Detect(target string) ([]stage.Node, error) {
-
 	hikNodes := make(chan []stage.Node, 1)
 	dahuaNodes := make(chan []stage.Node, 1)
 	hikErr := make(chan error, 1)
 	dahuaErr := make(chan error, 1)
-
 	go func() {
-
 		conn, err := net.ListenUDP("udp4", &net.UDPAddr{
 			IP:   net.IPv4(0, 0, 0, 0),
 			Port: HikListenPort,
@@ -184,9 +182,7 @@ func (d *CameraDetector) Detect(target string) ([]stage.Node, error) {
 		hikNodes <- nodes
 		hikErr <- err
 	}()
-
 	go func() {
-
 		conn, err := net.ListenUDP("udp4", &net.UDPAddr{
 			IP:   net.IPv4(0, 0, 0, 0),
 			Port: DahuaListenPort,
@@ -197,7 +193,6 @@ func (d *CameraDetector) Detect(target string) ([]stage.Node, error) {
 			return
 		}
 		defer conn.Close()
-
 		nodes, err := d.detectDahua(conn)
 		dahuaNodes <- nodes
 		dahuaErr <- err

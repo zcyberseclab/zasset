@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net"
 	"os"
 	"os/signal"
 	"runtime/debug"
@@ -12,8 +11,10 @@ import (
 	"syscall"
 	"time"
 
-	zasset "github.com/zcyberseclab/zasset/pkg"
 	"github.com/zcyberseclab/zscan/pkg/stage"
+
+	// Local imports should be in a separate group
+	zasset "github.com/zcyberseclab/zasset/pkg"
 )
 
 var (
@@ -22,46 +23,13 @@ var (
 	CommitSHA = "unknown"
 )
 
-// Get local available internal network segments
-func getLocalNetworks() ([]string, error) {
-	var networks []string
-	interfaces, err := net.Interfaces()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get network interfaces: %v", err)
-	}
-
-	for _, iface := range interfaces {
-
-		if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 {
-			continue
-		}
-
-		addrs, err := iface.Addrs()
-		if err != nil {
-			continue
-		}
-
-		for _, addr := range addrs {
-			if ipnet, ok := addr.(*net.IPNet); ok {
-				if ipv4 := ipnet.IP.To4(); ipv4 != nil {
-
-					if ipv4.IsPrivate() {
-						networks = append(networks, ipnet.String())
-					}
-				}
-			}
-		}
-	}
-	return networks, nil
-}
-
 func main() {
 	target := flag.String("target", "", "CIDR ranges to scan (comma-separated)")
 	configPath := flag.String("portconfig", "config/port_config.yaml", "Path to port config file")
 	templatesDir := flag.String("templates", "templates", "Path to templates directory")
 	versionFlag := flag.Bool("version", false, "Show version information")
 	networkCard := flag.String("interface", "", "Network interface to use")
-	passiveTimeout := flag.Int("passive-timeout", 60, "Timeout for passive scanning in seconds (0 for no timeout)")
+	//passiveTimeout := flag.Int("passive-timeout", 60, "Timeout for passive scanning in seconds (0 for no timeout)")
 
 	dbType := flag.String("db-type", "", "Database type (mysql/postgres/sqlite)")
 	dbDSN := flag.String("db-dsn", "", "Database connection string")
@@ -75,22 +43,24 @@ func main() {
 		fmt.Printf("Git Commit: %s\n", CommitSHA)
 		return
 	}
- 
+
 	baseConfig := &zasset.ScannerConfig{
 		ConfigPath:   *configPath,
 		TemplatesDir: *templatesDir,
 		NetworkCard:  *networkCard,
 	}
- 
+
 	reporterConfig := &zasset.ReporterConfig{
-		EnableConsole: true, // 总是启用控制台输出
+		EnableConsole: true,
 		HTTPEndpoint:  *reportURL,
 		Driver:        *dbType,
 		DSN:           *dbDSN,
 	}
- 
-	zasset.InitMultiReporter(reporterConfig)
- 
+
+	if err := zasset.InitMultiReporter(reporterConfig); err != nil {
+		log.Fatalf("Failed to initialize multi-reporter: %v", err)
+	}
+
 	activeCfg := *baseConfig
 	activeCfg.ScannerType = zasset.ActiveScanner
 	activeScanner := zasset.NewScanner(&activeCfg)
@@ -100,7 +70,6 @@ func main() {
 	//passiveCfg.PassiveTimeout = *passiveTimeout
 	//passiveScanner := zasset.NewScanner(&passiveCfg)
 
- 
 	var results []stage.Node
 	startTime := time.Now()
 
@@ -117,7 +86,7 @@ func main() {
 		}
 		log.Printf("Using user-specified targets: %v", targets)
 	} else {
-		networks, err := getLocalNetworks()
+		networks, err := zasset.GetLocalNetworks()
 		if err != nil {
 			log.Fatalf("Failed to get local networks: %v", err)
 		}
@@ -163,11 +132,8 @@ func main() {
 			activeNodes, err := activeScanner.Start(targets)
 			if err != nil {
 				log.Printf("Active scanner failed: %v", err)
-			} else if activeNodes != nil {
-				for _, node := range activeNodes {
-					results = append(results, node)
-				}
-				log.Printf("[Main] Active scanner completed, found %d nodes", len(activeNodes))
+			} else {
+				results = append(results, activeNodes...)
 			}
 		}
 		done <- struct{}{}
@@ -181,14 +147,7 @@ func main() {
 	case <-sigChan:
 		log.Println("\nReceived interrupt signal, stopping scanners...")
 		if activeScanner != nil {
-			activeScanner.Stop() // 确保调用Stop方法清理资源
-		}
-	case <-time.After(time.Duration(*passiveTimeout) * time.Second):
-		if *passiveTimeout > 0 {
-			log.Println("\nPassive scan timeout reached, stopping scanners...")
-			if activeScanner != nil {
-				activeScanner.Stop()
-			}
+			activeScanner.Stop()
 		}
 	case <-done:
 		log.Println("\nScan completed successfully")
@@ -203,5 +162,4 @@ func main() {
 	log.Printf("Target Preparation Time: %v", timings["target_preparation"])
 	log.Printf("Active Scanning Time: %v", timings["active_scanning"])
 	log.Printf("Total Nodes Discovered: %d", len(results))
- 
 }

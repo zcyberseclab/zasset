@@ -57,30 +57,13 @@ func (z *ZScanDetector) Detect(target string) ([]stage.Node, error) {
 		return nil, err
 	}
 	defer scanner.Close()
-	log.Printf("[ZScanDetector] Scanner initialized successfully")
 
-	// 执行扫描
 	log.Printf("[ZScanDetector] Starting scan for network: %s", target)
 	nodes, err := scanner.Scan(target)
 	if err != nil {
 		log.Printf("[ZScanDetector] Scan failed: %v", err)
 		return nil, err
 	}
-
-	// 详细的结果统计
-	log.Printf("[ZScanDetector] Scan completed for target: %s", target)
-	log.Printf("[ZScanDetector] Results summary:")
-	log.Printf("  - Total nodes found: %d", len(nodes))
-	for i, node := range nodes {
-		log.Printf("  - Node %d:", i+1)
-		log.Printf("    * IP: %s", node.IP)
-		var portNumbers []int
-		for _, port := range node.Ports {
-			portNumbers = append(portNumbers, int(port.Port))
-		}
-		log.Printf("    * Ports: %v", portNumbers)
-	}
-	log.Printf("[ZScanDetector] ========== Detection Completed ==========\n")
 
 	return nodes, nil
 }

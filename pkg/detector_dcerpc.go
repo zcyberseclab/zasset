@@ -23,7 +23,6 @@ func NewDCERPCDetector() *DCERPCDetector {
 }
 
 func (d *DCERPCDetector) Detect(target string) ([]stage.Node, error) {
-
 	const port = 135 // Replace with the appropriate port for your use case
 	var nodes []stage.Node
 	var mu sync.Mutex
@@ -42,7 +41,6 @@ func (d *DCERPCDetector) Detect(target string) ([]stage.Node, error) {
 	}
 
 	for _, ipStr := range targets {
-
 		wg.Add(1)
 		go func(ip string) {
 			defer wg.Done()

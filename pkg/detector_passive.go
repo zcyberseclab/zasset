@@ -43,26 +43,22 @@ func (p *PassiveDetector) getNodes() ([]stage.Node, error) {
 }
 
 func (p *PassiveDetector) Detect(target string) ([]stage.Node, error) {
-
 	handle, err := p.openInterface()
 	if err != nil {
 		log.Printf("[Passive] Failed to open interface: %v\n", err)
 		return nil, err
 	}
 	defer handle.Close()
-
 	err = p.capturePackets(handle)
 	if err != nil {
 		log.Printf("[Passive] Error capturing packets: %v\n", err)
 		return nil, err
 	}
-
 	nodes, err := p.getNodes()
 	if err != nil {
 		log.Printf("[Passive] Error getting nodes: %v\n", err)
 		return nil, err
 	}
-
 	log.Printf("[Passive] Detection completed. Found %d nodes\n", len(nodes))
 	return nodes, err
 }
@@ -71,13 +67,10 @@ func (p *PassiveDetector) capturePackets(handle *pcap.Handle) error {
 	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
 	discovered := make(map[string]*stage.Node)
 	var mu sync.Mutex
-
 	fmt.Println("[passive] Starting packet capture...")
-
 	// 创建一个done通道用于外部控制
 	done := make(chan bool)
 	defer close(done)
-
 	// 启动一个goroutine来处理数据包
 	go func() {
 		for packet := range packetSource.Packets() {

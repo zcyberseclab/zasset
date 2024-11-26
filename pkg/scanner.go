@@ -81,19 +81,16 @@ func (s *Scanner) startActiveScan(targets []string) ([]stage.Node, error) {
 	nodeMap := make(map[string]*stage.Node)
 	var nodesMutex sync.Mutex
 
-	// 创建工作池来并行处理目标
 	targetWg := sync.WaitGroup{}
-	maxConcurrent := runtime.GOMAXPROCS(0) * 2 // 根据CPU核心数动态调整
+	maxConcurrent := runtime.GOMAXPROCS(0) * 2
 	semaphore := make(chan struct{}, maxConcurrent)
 
-	// 添加detector级别的并发控制
-	maxDetectorConcurrent := 5 // 每个目标允许同时运行的detector数量
+	maxDetectorConcurrent := 5
 	detectorSemaphore := make(chan struct{}, maxDetectorConcurrent)
 
-	// 为不同的detector设置不同的超时时间
 	timeouts := map[string]time.Duration{
 		"SNMPDetector":   15 * time.Second,
-		"ZScanDetector":  30 * time.Second,
+		"ZScanDetector":  60 * time.Second,
 		"PingDetector":   20 * time.Second,
 		"DCERPCDetector": 5 * time.Second,
 		"CameraDetector": 5 * time.Second,
@@ -110,8 +107,8 @@ func (s *Scanner) startActiveScan(targets []string) ([]stage.Node, error) {
 		targetWg.Add(1)
 		go func(target string) {
 			defer targetWg.Done()
-			semaphore <- struct{}{}        // 获取信号量
-			defer func() { <-semaphore }() // 释放信号量
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
 
 			log.Printf("[Scanner] Actively scanning target: %s", target)
 
@@ -130,12 +127,11 @@ func (s *Scanner) startActiveScan(targets []string) ([]stage.Node, error) {
 					var err error
 
 					go func() {
-						detectorSemaphore <- struct{}{} // 获取信号量
+						detectorSemaphore <- struct{}{}
 						nodes, err = d.Detect(t)
 						done <- true
 					}()
 
-					// 在detector执行时使用对应的超时时间
 					timeout := timeouts[detectorName]
 					select {
 					case <-done:
@@ -153,23 +149,13 @@ func (s *Scanner) startActiveScan(targets []string) ([]stage.Node, error) {
 						s.incrementDiscoveredHosts(len(nodes))
 
 						nodesMutex.Lock()
-						var nodeBatch []*stage.Node
-						batchSize := 100
+
 						for _, node := range nodes {
 							if existing, exists := nodeMap[node.IP]; exists {
 								MergeNodes(existing, &node)
 							} else {
 								nodeCopy := node
 								nodeMap[node.IP] = &nodeCopy
-								nodeBatch = append(nodeBatch, &nodeCopy)
-							}
-
-							if len(nodeBatch) >= batchSize {
-								// 批量报告
-								if reporter, err := GetMultiReporter(); err == nil {
-									reporter.ReportNodes(nodeBatch)
-								}
-								nodeBatch = nodeBatch[:0]
 							}
 						}
 						nodesMutex.Unlock()
@@ -177,7 +163,7 @@ func (s *Scanner) startActiveScan(targets []string) ([]stage.Node, error) {
 						log.Printf("[Scanner] Detector %s found no nodes for target %s", detectorName, t)
 					}
 
-					<-detectorSemaphore // 释放信号量
+					<-detectorSemaphore
 				}(detector, target)
 			}
 
@@ -187,20 +173,23 @@ func (s *Scanner) startActiveScan(targets []string) ([]stage.Node, error) {
 
 	targetWg.Wait()
 
-	// 将 map 转换回切片
+	reporter, err := GetMultiReporter()
+	if err != nil {
+		log.Printf("[Scanner] Warning: Failed to get reporter: %v", err)
+	} else {
+		var nodesToReport []*stage.Node
+		for _, node := range nodeMap {
+			nodesToReport = append(nodesToReport, node)
+		}
+		if err := reporter.ReportNodes(nodesToReport); err != nil {
+			log.Printf("[Scanner] Warning: Failed to report nodes: %v", err)
+		}
+	}
+
 	for _, node := range nodeMap {
-		reporter, err := GetMultiReporter()
-		if err != nil {
-			log.Printf("[Scanner] Warning: Failed to get reporter: %v", err)
-			continue
-		}
-		if err := reporter.Report(node); err != nil {
-			log.Printf("[Scanner] Warning: Failed to report node %s: %v", node.IP, err)
-		}
 		allNodes = append(allNodes, *node)
 	}
 
-	log.Printf("[Scanner] Active scan completed for targets: %v", targets)
 	return allNodes, nil
 }
 
@@ -250,19 +239,19 @@ func (s *Scanner) startPassiveScan() ([]stage.Node, error) {
 
 	detectorWg.Wait()
 
-	// Report merged nodes after all detections are complete
-	for _, node := range nodeMap {
-		reporter, err := GetMultiReporter()
-		if err != nil {
-			log.Printf("[Scanner] Warning: Failed to get reporter: %v", err)
-			continue
+	reporter, err := GetMultiReporter()
+	if err != nil {
+		log.Printf("[Scanner] Warning: Failed to get reporter: %v", err)
+	} else {
+		var nodesToReport []*stage.Node
+		for _, node := range nodeMap {
+			nodesToReport = append(nodesToReport, node)
 		}
-		if err := reporter.Report(node); err != nil {
-			log.Printf("[Scanner] Warning: Failed to report node %s: %v", node.IP, err)
+		if err := reporter.ReportNodes(nodesToReport); err != nil {
+			log.Printf("[Scanner] Warning: Failed to report nodes: %v", err)
 		}
 	}
 
-	// 将 map 转换回切片
 	for _, node := range nodeMap {
 		allNodes = append(allNodes, *node)
 	}
@@ -326,7 +315,6 @@ func MergeNodes(existing *stage.Node, new *stage.Node) {
 			existing.Tags = append(existing.Tags, newTag)
 		}
 	}
-
 }
 
 func (s *Scanner) incrementDiscoveredHosts(count int) {

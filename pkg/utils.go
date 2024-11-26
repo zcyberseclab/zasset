@@ -32,9 +32,8 @@ func incrementIP(ip net.IP) {
 	}
 }
 
-// GetLocalNetworkIPs 获取本地网络IP地址列表
-func GetLocalNetworkIPs() ([]string, error) {
-	var ips []string
+func GetLocalNetworks() ([]string, error) {
+	var networks []string
 	interfaces, err := net.Interfaces()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get network interfaces: %v", err)
@@ -52,11 +51,13 @@ func GetLocalNetworkIPs() ([]string, error) {
 
 		for _, addr := range addrs {
 			if ipnet, ok := addr.(*net.IPNet); ok {
-				if ipv4 := ipnet.IP.To4(); ipv4 != nil && ipv4.IsPrivate() {
-					ips = append(ips, ipv4.String())
+				if ipv4 := ipnet.IP.To4(); ipv4 != nil {
+					if ipv4.IsPrivate() {
+						networks = append(networks, ipnet.String())
+					}
 				}
 			}
 		}
 	}
-	return ips, nil
+	return networks, nil
 }

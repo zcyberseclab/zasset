@@ -22,7 +22,6 @@ func NewPingDetector() *PingDetector {
 }
 
 func (p *PingDetector) sendPingRequests(ctx context.Context, ips []string) ([]stage.Node, error) {
-
 	resultChan := make(chan stage.Node, len(ips))
 	errChan := make(chan error, len(ips))
 
@@ -65,15 +64,11 @@ func (p *PingDetector) sendPingRequests(ctx context.Context, ips []string) ([]st
 		close(errChan)
 	}()
 
-	// 收集结果
 	var nodes []stage.Node
-	var errs []error
-
 	for {
 		select {
 		case node, ok := <-resultChan:
 			if !ok {
-
 				goto Done
 			}
 			nodes = append(nodes, node)
@@ -81,7 +76,7 @@ func (p *PingDetector) sendPingRequests(ctx context.Context, ips []string) ([]st
 			if !ok {
 				continue
 			}
-			errs = append(errs, err)
+			log.Printf("[Ping] Error during scan: %v", err)
 		case <-ctx.Done():
 			return nodes, ctx.Err()
 		}
@@ -93,7 +88,6 @@ Done:
 }
 
 func ping(ip string) error {
-
 	conn, err := net.Dial("ip4:icmp", ip)
 	if err != nil {
 		return err
@@ -106,7 +100,9 @@ func ping(ip string) error {
 		return err
 	}
 
-	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	if err := conn.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		log.Printf("Failed to set deadline: %v", err)
+	}
 
 	reply := make([]byte, 1024)
 	_, err = conn.Read(reply)
@@ -126,16 +122,12 @@ func (p *PingDetector) Name() string {
 }
 
 func (p *PingDetector) Detect(target string) ([]stage.Node, error) {
-
 	var targets []string
-
 	if _, ipnet, err := net.ParseCIDR(target); err == nil {
-
 		for ip := ipnet.IP.Mask(ipnet.Mask); ipnet.Contains(ip); incrementIP(ip) {
 			targets = append(targets, ip.String())
 		}
 	} else {
-
 		targets = append(targets, target)
 	}
 
@@ -151,7 +143,6 @@ func (p *PingDetector) Detect(target string) ([]stage.Node, error) {
 	log.Printf("[Ping] Detection completed. Found %d nodes\n", len(nodes)) // 只在结果汇总时打印
 	for i := 0; i < len(nodes); i++ {
 		log.Printf("[Ping] Found node: %s\n", nodes[i].IP)
-
 	}
 	return nodes, err
 }

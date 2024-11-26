@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -28,12 +30,9 @@ var (
 	once                  sync.Once
 	initErr               error
 	initialized           atomic.Bool // 使用原子操作的布尔值来标记初始化状态
-	initMutex             sync.Mutex  // 用于初始化过程的互斥锁
 )
 
-// InitMultiReporter 初始化MultiReporter，只能调用一次，重复调用会返回错误
 func InitMultiReporter(config *ReporterConfig) error {
-
 	once.Do(func() {
 		if config == nil {
 			initErr = fmt.Errorf("config cannot be nil")
@@ -119,24 +118,105 @@ func (mr *MultiReporter) ReportNodes(nodes []*stage.Node) error {
 	return nil
 }
 
-// ConsoleReporter 控制台上报器
 type ConsoleReporter struct{}
 
 func (cr *ConsoleReporter) Report(node *stage.Node) error {
-	// 实现控制台输出，可以根据需要格式化输出
-	fmt.Printf("Node Result: %+v\n", node)
+	fmt.Printf("\n=== Node Report ===\n")
+
+	// Basic Information
+	fmt.Printf("IP: %s\n", node.IP)
+	if node.Domain != "" {
+		fmt.Printf("Domain: %s\n", node.Domain)
+	}
+	if node.MAC != "" {
+		fmt.Printf("MAC: %s\n", node.MAC)
+	}
+	if node.Hostname != "" {
+		fmt.Printf("Hostname: %s\n", node.Hostname)
+	}
+	if len(node.Tags) > 0 {
+		fmt.Printf("Tags: %s\n", strings.Join(node.Tags, ", "))
+	}
+	if node.OS != "" {
+		fmt.Printf("OS: %s\n", node.OS)
+	}
+
+	// Ports and Vulnerabilities Summary
+	if len(node.Ports) > 0 {
+		fmt.Printf("Open Ports: %d\n", len(node.Ports))
+	}
+	if len(node.Vulnerabilities) > 0 {
+		fmt.Printf("Vulnerabilities Found: %d\n", len(node.Vulnerabilities))
+	}
+
+	// Device Information
+	if node.Manufacturer != "" {
+		fmt.Printf("Manufacturer: %s\n", node.Manufacturer)
+	}
+	if node.Devicetype != "" {
+		fmt.Printf("Device Type: %s\n", node.Devicetype)
+	}
+	if node.Model != "" {
+		fmt.Printf("Model: %s\n", node.Model)
+	}
+
+	// Geographic Information (if available)
+	if node.Country != "" {
+		fmt.Printf("\nLocation: ")
+		if node.City != "" {
+			fmt.Printf("%s, ", node.City)
+		}
+		fmt.Printf("%s", node.Country)
+		if node.CountryCode != "" {
+			fmt.Printf(" (%s)", node.CountryCode)
+		}
+		fmt.Printf("\n")
+	}
+
+	// Network Information
+	if node.ISP != "" {
+		fmt.Printf("ISP: %s\n", node.ISP)
+	}
+	if node.NetworkType != "" {
+		fmt.Printf("Network Type: %s\n", node.NetworkType)
+	}
+
+	// Security Information
+	if node.IsAnonymous || node.IsAnonymousVPN || node.IsHosting || node.IsProxy || node.IsTorExitNode {
+		fmt.Printf("\nSecurity Flags:\n")
+		if node.IsAnonymous {
+			fmt.Printf("- Anonymous\n")
+		}
+		if node.IsAnonymousVPN {
+			fmt.Printf("- Anonymous VPN\n")
+		}
+		if node.IsHosting {
+			fmt.Printf("- Hosting\n")
+		}
+		if node.IsProxy {
+			fmt.Printf("- Proxy\n")
+		}
+		if node.IsTorExitNode {
+			fmt.Printf("- Tor Exit Node\n")
+		}
+	}
+
+	fmt.Printf("================\n")
 	return nil
 }
 
 func (cr *ConsoleReporter) ReportNodes(nodes []*stage.Node) error {
-	// 批量输出到控制台
-	for _, node := range nodes {
-		fmt.Printf("Node Result: %+v\n", node)
+	fmt.Printf("\n=== Batch Node Report (%d nodes) ===\n", len(nodes))
+	for i, node := range nodes {
+		fmt.Printf("\n[Node %d/%d]\n", i+1, len(nodes))
+		if err := cr.Report(node); err != nil {
+			log.Printf("Failed to report node: %v", err)
+		}
 	}
+	fmt.Printf("=== End of Batch Report ===\n\n")
 	return nil
 }
 
-// DBReporter 数据库上报器
 type DBReporter struct {
 	db *sql.DB
 }
@@ -146,20 +226,14 @@ func NewDBReporter(db *sql.DB) *DBReporter {
 }
 
 func (dr *DBReporter) Report(node *stage.Node) error {
-	// TODO: 实现数据库存储逻辑
-	// 根据 stage.Node 的结构设计相应的表结构和存储逻辑
 	return nil
 }
 
 func (dr *DBReporter) ReportNodes(nodes []*stage.Node) error {
-	// TODO: 实现批量数据库存储逻辑
-	// 可以使用事务或批量插入来优化性能
 	tx, err := dr.db.Begin()
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-
-	// TODO: 实现批量插入逻辑
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit transaction: %w", err)
@@ -167,7 +241,6 @@ func (dr *DBReporter) ReportNodes(nodes []*stage.Node) error {
 	return nil
 }
 
-// HTTPReporter HTTP上报器
 type HTTPReporter struct {
 	endpoint string
 	client   *http.Client
@@ -218,10 +291,9 @@ func (hr *HTTPReporter) ReportNodes(nodes []*stage.Node) error {
 	return nil
 }
 
-// ReporterConfig 定义上报器的配置参数
 type ReporterConfig struct {
-	EnableConsole bool   // 是否启用控制台输出
-	HTTPEndpoint  string // HTTP上报地址，非空则启用HTTP上报
-	Driver        string // 数据库驱动类型
-	DSN           string // 数据库连接字符串
+	EnableConsole bool
+	HTTPEndpoint  string
+	Driver        string
+	DSN           string
 }

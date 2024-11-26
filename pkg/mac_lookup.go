@@ -33,7 +33,6 @@ var (
 )
 
 func extractEmbeddedData() error {
-
 	if err := os.MkdirAll(localDataDir, 0755); err != nil {
 		return err
 	}
@@ -128,7 +127,6 @@ func (db *OUIDatabase) loadDatabase() {
 }
 
 func lookupManufacturer(mac string) string {
-
 	mac = strings.ToUpper(strings.ReplaceAll(mac, ":", ""))
 	mac = strings.ReplaceAll(mac, "-", "")
 
@@ -149,7 +147,6 @@ func lookupManufacturer(mac string) string {
 	}
 
 	if manufacturer, ok := db.manufacturers[oui]; ok {
-
 		return manufacturer
 	}
 
